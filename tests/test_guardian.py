@@ -8,6 +8,81 @@ from webhook_guardian.exceptions import UnauthorizedIPError, RateLimitError, Pay
 
 
 class TestWebhookGuardian:
+    def test_check_payload_size_invalid_type(self):
+        """Test _check_payload_size with invalid type (object)."""
+        guardian = WebhookGuardian(self.secret, max_payload_size=10)
+        class Dummy: pass
+        with pytest.raises(Exception):
+            guardian._check_payload_size(Dummy())
+
+    def test_validate_webhook_unexpected_error(self):
+        """Test validate_webhook handles unexpected error gracefully."""
+        guardian = WebhookGuardian(self.secret)
+        # Pass an object as payload to cause error
+        class Dummy: pass
+        signature = guardian.validator._compute_signature(self.test_payload)
+        result = guardian.validate_webhook(
+            payload=Dummy(),
+            signature=signature,
+            client_ip=self.test_ip
+        )
+        assert result.is_valid is False
+        assert result.error_type == "AttributeError" or result.error_type == "TypeError"
+
+    def test_init_with_rate_limit_missing_keys(self):
+        """Test guardian initialization with missing rate_limit keys."""
+        with pytest.raises(KeyError):
+            WebhookGuardian(self.secret, rate_limit={"requests": 1})
+
+    def test_rate_limiter_window_expiry(self):
+        """Test rate limiter allows after window expiry."""
+        rate_limit = {"requests": 1, "window": 1}
+        guardian = WebhookGuardian(self.secret, rate_limit=rate_limit)
+        signature = guardian.validator._compute_signature(self.test_payload)
+        # First request
+        result1 = guardian.validate_webhook(
+            payload=self.test_payload,
+            signature=signature,
+            client_ip=self.test_ip
+        )
+        assert result1.is_valid is True
+        # Wait for window to expire
+        import time as t
+        t.sleep(1.1)
+        # Second request should succeed
+        result2 = guardian.validate_webhook(
+            payload=self.test_payload,
+            signature=signature,
+            client_ip=self.test_ip
+        )
+        assert result2.is_valid is True
+    def test_init_with_invalid_ip_range(self):
+        """Test guardian initialization fails with invalid IP range."""
+        with pytest.raises(ValueError, match="Invalid IP range"):
+            WebhookGuardian(self.secret, allowed_ips=["999.999.999.999/99"])
+
+    def test_check_ip_whitelist_malformed_ip(self):
+        """Test _check_ip_whitelist returns False for malformed IP address."""
+        guardian = WebhookGuardian(self.secret, allowed_ips=["192.168.1.0/24"])
+        assert guardian._check_ip_whitelist("bad_ip_address") is False
+    def test_check_ip_whitelist_invalid_ip(self):
+        """Test _check_ip_whitelist returns False for invalid IP address."""
+        guardian = WebhookGuardian(self.secret, allowed_ips=["192.168.1.0/24"])
+        assert guardian._check_ip_whitelist("not_an_ip") is False
+
+    def test_check_payload_size_bytes(self):
+        """Test _check_payload_size with bytes payload."""
+        guardian = WebhookGuardian(self.secret, max_payload_size=10)
+        payload = b"1234567890"
+        assert guardian._check_payload_size(payload) is True
+        payload = b"12345678901"
+        assert guardian._check_payload_size(payload) is False
+
+    def test_get_rate_limit_status_disabled(self):
+        """Test get_rate_limit_status returns disabled when no rate limiter."""
+        guardian = WebhookGuardian(self.secret)
+        status = guardian.get_rate_limit_status(self.test_ip)
+        assert status["rate_limiting"] == "disabled"
     """Test cases for WebhookGuardian."""
     
     def setup_method(self):
@@ -155,6 +230,20 @@ class TestWebhookGuardian:
         assert result.is_valid is False
         assert result.error_type == "InvalidSignature"
     
+    def test_validate_webhook_catches_unexpected_exception(self):
+        """Test webhook validation catches unexpected exceptions."""
+        guardian = WebhookGuardian(self.secret)
+        class Dummy: pass
+        signature = guardian.validator._compute_signature(self.test_payload)
+        result = guardian.validate_webhook(
+            payload=Dummy(),  # This will cause an AttributeError
+            signature=signature,
+            client_ip=self.test_ip
+        )
+        assert result.is_valid is False
+        assert result.error_type in ("AttributeError", "TypeError")
+        assert "Validation error" in result.error_message
+
     def test_get_rate_limit_status_disabled(self):
         """Test rate limit status when disabled."""
         guardian = WebhookGuardian(self.secret)

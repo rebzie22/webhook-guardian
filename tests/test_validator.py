@@ -9,6 +9,99 @@ from webhook_guardian.exceptions import InvalidSignatureError, ReplayAttackError
 
 
 class TestWebhookValidator:
+    def test_invalid_ed25519_public_key_pem_parse_error(self):
+        """Test Ed25519 public key with PEM that triggers second except Exception block."""
+        # This is a PEM that will parse as PEM but not as Ed25519, triggering the second except
+        bad_pem = b"-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBALeQw==\n-----END PUBLIC KEY-----"
+        with pytest.raises(ValueError, match="Invalid Ed25519 public key"):
+            WebhookValidator(self.secret, ed25519_public_key=bad_pem)
+    def test_invalid_ed25519_public_key_pem(self):
+        """Test PEM-encoded but invalid Ed25519 public key raises ValueError."""
+        invalid_pem = b"-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAn\n-----END PUBLIC KEY-----"
+        with pytest.raises(ValueError, match="Invalid Ed25519 public key"):
+            WebhookValidator(self.secret, ed25519_public_key=invalid_pem)
+
+    def test_compute_signature_ed25519_error(self):
+        """Test _compute_signature with ed25519 algorithm raises ValueError."""
+        with pytest.raises(ValueError, match="Ed25519 signatures must be generated with a private key"):
+            self.validator._compute_signature(self.test_payload, algorithm="ed25519")
+    def test_invalid_ed25519_public_key(self):
+        """Test invalid Ed25519 public key raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid Ed25519 public key"):
+            WebhookValidator(self.secret, ed25519_public_key=b'invalidkey')
+
+    def test_unsupported_algorithm_compute_signature(self):
+        """Test unsupported algorithm in _compute_signature raises ValueError."""
+        with pytest.raises(ValueError, match="Unsupported algorithm"):
+            self.validator._compute_signature(self.test_payload, algorithm="unsupported")
+
+    def test_unsupported_algorithm_verify_signature(self):
+        """Test unsupported algorithm in verify_signature raises InvalidSignatureError."""
+        signature = "unsupported=abcd"
+        with pytest.raises(InvalidSignatureError, match="Unsupported algorithm"):
+            self.validator.verify_signature(self.test_payload, signature)
+
+    def test_ed25519_signature_missing_public_key(self):
+        """Test Ed25519 signature verification fails if public key not set."""
+        signature = "ed25519=abcd"
+        with pytest.raises(InvalidSignatureError, match="Ed25519 public key not configured"):
+            self.validator.verify_signature(self.test_payload, signature)
+
+    def test_invalid_signature_format(self):
+        """Test invalid signature format raises InvalidSignatureError."""
+        with pytest.raises(InvalidSignatureError, match="Invalid signature format"):
+            self.validator.verify_signature(self.test_payload, "invalidformat")
+
+    def test_invalid_timestamp_type(self):
+        """Test invalid timestamp type raises ReplayAttackError."""
+        with pytest.raises(ReplayAttackError, match="Invalid timestamp format"):
+            self.validator.verify_timestamp(object())
+    def test_hmac_sha1_signature(self):
+        """Test HMAC-SHA1 signature verification."""
+        signature = self.validator._compute_signature(self.test_payload, algorithm="sha1")
+        assert signature.startswith("sha1=")
+        assert self.validator.verify_signature(self.test_payload, signature) is True
+
+    def test_hmac_sha512_signature(self):
+        """Test HMAC-SHA512 signature verification."""
+        signature = self.validator._compute_signature(self.test_payload, algorithm="sha512")
+        assert signature.startswith("sha512=")
+        assert self.validator.verify_signature(self.test_payload, signature) is True
+
+    def test_ed25519_signature(self):
+        """Test Ed25519 signature verification."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+
+        private_key = Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+        public_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+        payload = self.test_payload.encode('utf-8')
+        signature_bytes = private_key.sign(payload)
+        signature = f"ed25519={signature_bytes.hex()}"
+        validator = WebhookValidator(secret="irrelevant", ed25519_public_key=public_bytes)
+        assert validator.verify_signature(payload, signature) is True
+
+    def test_ed25519_invalid_signature(self):
+        """Test Ed25519 signature verification fails with wrong signature."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+
+        private_key = Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+        public_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+        payload = self.test_payload.encode('utf-8')
+        # Tamper with signature
+        signature_bytes = b'0' * 64
+        signature = f"ed25519={signature_bytes.hex()}"
+        validator = WebhookValidator(secret="irrelevant", ed25519_public_key=public_bytes)
+        assert validator.verify_signature(payload, signature) is False
     """Test cases for WebhookValidator."""
     
     def setup_method(self):
