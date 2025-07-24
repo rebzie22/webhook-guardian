@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "webhook-guardian"
-version = "0.1.0"
+version = "0.1.1"
 description = "A security-focused Python library for validating and handling webhooks safely"
 readme = "README.md"
 license = {text = "MIT"}

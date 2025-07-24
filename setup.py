@@ -11,7 +11,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="webhook-guardian",
-    version="0.1.0",
+    version="0.1.1",
     author="Jordan Guck",
     author_email="your.email@example.com",
     description="A security-focused Python library for validating and handling webhooks safely",
